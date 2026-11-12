@@ -1,2 +1,18 @@
 # dbv-pipeline
-ceci-based pipeline for running debvader: variational autoencoder for deblending.
+
+Pipeline to run [debvader](https://github.com/astrodeepnet/debvader/tree/main) on data to deblend galaxies.
+
+
+
+# Installation
+
+```bash
+pip install .
+```
+
+# Run example
+
+```bash
+cd example
+ceci ceci_dummy_stage.yml
+```
