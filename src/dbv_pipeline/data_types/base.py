@@ -389,9 +389,9 @@ class Directory(DataFile):
     def read_provenance(self):
         try:
             f = open(self.file / "provenance.yml")
-            attrs = yaml.load(f)
+            attrs = yaml.safe_load(f) or {}
 
-        except KeyError:
+        except (FileNotFoundError, yaml.YAMLError):
             f = None
             attrs = {}
 
@@ -429,7 +429,7 @@ class FileCollection(Directory):
         Read a listing file from the directory.
         """
         fn = self.path_for_file("txpipe_listing.txt")
-        with open(fn, "w") as f:
+        with open(fn, "r") as f:
             filenames = yaml.safe_load(f)
         return filenames
 
@@ -504,7 +504,6 @@ class ParquetFile(DataFile):
 
     def close(self):
         pass
-
 
 class ASDFFile(DataFile):
     supports_parallel_write = False

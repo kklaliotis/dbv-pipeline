@@ -1,0 +1,26 @@
+modules: dbv_pipeline.select dbv_pipeline.cutouts dbv_pipeline.psf dbv_pipeline.noise 
+
+launcher:
+  name: mini
+  interval: 1.0
+
+site:
+  name: local
+  max_threads: 8
+
+stages:
+  - name: SelectSources
+    nprocess: 1
+  - name: MakeCutouts
+    nprocess: 1
+  - name: MeasurePSF
+    nprocess: 1
+  - name: MeasureNoise
+    nprocess: 1
+
+inputs: {}
+
+config: pipelines/config_test1.yaml
+resume: True
+output_dir: /pscratch/sd/l/laliotis/dbv/test1/data_dp2
+log_dir: /pscratch/sd/l/laliotis/dbv/test1/logs

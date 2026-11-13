@@ -3,7 +3,7 @@
 # stage classes.  Any stages imported in these
 # modules are automatically detected and their names can
 # be used below
-modules: scm_pipeline
+modules: dbv_pipeline
 
 # The launcher to use
 # These are defined in ceci/sites

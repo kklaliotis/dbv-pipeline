@@ -1,0 +1,43 @@
+# Values in this section are accessible to all the different stages.
+# They can be overridden by individual stages though.
+global:
+    option: "something"
+
+
+# Here's the list of stages we are using:
+# Select
+# Cutouts
+# PSF
+# Noise
+# Train
+# Inject
+# Deblend
+# Evaluate  
+# QA
+
+Select:
+    option: setting
+    
+Cutouts:
+    option: setting
+
+PSF:
+    option: setting
+    
+Noise:
+    option: setting
+
+Train:
+    option: setting
+
+Inject:
+    option: setting
+
+Deblend:
+    option: setting
+
+Evaluate:
+    option: setting
+
+QA: 
+    option: setting

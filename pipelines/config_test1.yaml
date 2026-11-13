@@ -1,0 +1,56 @@
+global:
+  instrument: ["rubin"]
+  bands: [u, g, r, i, z, y]
+  pixel_scale: 0.2 # arcsec per pixel, data grid
+  model_pixel_scale: 0.2 # arcsec per pixel, decoder grid (equal in Test I)
+  stamp_arcsec: 11.8 # -> 59 px, always rounded to odd
+  psf_stamp_px: 35
+  unit: nJy
+
+  internal_psf:
+    type: moffat
+    beta: 4.765
+    fwhm_arcsec: 0.5 # one number, or a list with one value per band
+
+  kernel_reg: 1.0e-3
+  kernel_max: 1.02 # assert max |K~| <= this
+  kernel_recon_tol: 1.0e-3
+  split: {train: 0.8, val: 0.1, test: 0.1, seed: 0}
+  work_dir: /pscratch/sd/l/laliotis/dbv/test1/work
+
+SelectSources:
+  dp2_cutouts:
+    name: test1_ecdfs
+    sky_box: [53.00, 53.30, -27.95, -27.70] # [ra_min, ra_max, dec_min, dec_max]; start with the demo box
+    butler: {repo: dp2, collections: dp2, skymap: lsst_cells_v2}
+    rubin: {source: butler, tracts: [5063]}
+    euclid: {hats_url: "hf://datasets/hugging-science/mmu_euclid_q1/euclid",
+            margin_deg: 0.01, pa_convention: measured}
+    copaings: {friendly_path: null, linking_length: 3.0, mag_cut: 35,
+                euclid_region: auto, eot_dense_max: 0, n_eot_tasks: 4, 
+                n_sb_tasks: 4}
+    cuts: {snr_min: 5.0}
+  montage_n: 24   # QA stamps per montage (small Butler reads); 0 disables
+
+MakeCutouts:
+  dp2_cutouts:
+    name: test1_ecdfs
+    sky_box: [53.00, 53.30, -27.95, -27.70]
+    butler: {repo: dp2, collections: dp2, skymap: lsst_cells_v2}
+    pixels: {source: butler, patches: [[5063, 34]]}  #null
+    cuts:
+      bad_planes: [SATURATED, COSMIC_RAY, INTERPOLATED, DETECTION_EDGE]
+      k_ellipse: 3.0
+      snr_min: 5.0
+      delta_e_max: 0.02
+      shape_band: i
+      sky_tries: 5000
+      seed: 1234
+    masking:
+      method: footprint
+      grow_px: 2
+      shared_k: 2.0
+    export:
+      apply: [cut1, cut2, cut3, in_region, cut4, cut5, cut6, cut7, cut8, mask]
+      mask_planes: [NO_DATA, SATURATED, COSMIC_RAY, INTERPOLATED, DETECTION_EDGE]
+      n_empty_per_patch: 400

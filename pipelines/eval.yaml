@@ -1,0 +1,26 @@
+modules: dbv_pipeline
+
+launcher: 
+  name: mini
+  interval: 1.0
+
+site:
+  name: local
+  max_threads: 8
+
+stages:
+  - name: RunDeblender
+    nprocess: 1
+  - name: Evaluate
+    nprocess: 1
+
+inputs:
+  deblender_model: /pscratch/sd/l/laliotis/dbv/test1/train/deblender_model
+  noise_model: /pscratch/sd/l/laliotis/dbv/test1/data_dp2/noise_model.yml
+  eval_blends_real: /pscratch/sd/l/laliotis/dbv/test1/train/eval_blends_real
+  eval_blends_injected: /pscratch/sd/l/laliotis/dbv/test1/train/eval_blends_injected
+
+config: pipelines/config_test1.yaml
+resume: True
+output_dir: /pscratch/sd/l/laliotis/dbv/test1/eval
+log_dir: /pscratch/sd/l/laliotis/dbv/test1/logs

@@ -3,15 +3,14 @@
 # modules are automatically detected and their names can
 # be used below
 modules: 
-  - select
-  - cutouts
-  - psf
-  - noise
-  - train
-  - inject
-  - deblend
-  - evaluate
-  - qa
+  - dbv_pipeline.select  # SelectSources
+  - dbv_pipeline.cutouts  # MakeCutouts
+  - dbv_pipeline.psf  # MeasurePSF, MakeKernels
+  - dbv_pipeline.noise  # MeasureNoise
+  - dbv_pipeline.train  # TrainPrior, TrainDeblender
+  - dbv_pipeline.inject  # InjectBlends
+  - dbv_pipeline.deblend  # RunDeblender
+  - dbv_pipeline.evaluate  # Evaluate
 
 # The launcher to use
 # These are defined in ceci/sites
@@ -26,24 +25,27 @@ site:
 # The list of stages to run and the number of processors
 # to use for each.
 stages:
-    - name: Select
+    - name: SelectSources
       nprocess: 1
-    - name: Cutouts
+    - name: MakeCutouts
       nprocess: 1
-    - name: PSF
+    - name: MeasurePSF
       nprocess: 1
-    - name: Noise
+    - name: MakeKernels
       nprocess: 1
-    - name: Train
+    - name: MeasureNoise
       nprocess: 1
-    - name: Inject
+    - name: TrainPrior
       nprocess: 1
-    - name: Deblend
+    - name: InjectBlends
+      nprocess: 1
+    - name: TrainDeblender
+      nprocess: 1
+    - name: RunDeblender
       nprocess: 1
     - name: Evaluate
       nprocess: 1
-    - name: QA
-      nprocess: 1
+
 
 
 # Definitions of where to find inputs for the overall pipeline.

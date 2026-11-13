@@ -1,0 +1,30 @@
+modules: dbv_pipeline
+
+launcher: 
+  name: mini
+  interval: 1.0
+
+site:
+  name: local
+  max_threads: 8
+
+stages:
+  - name: CheckKernels
+    nprocess: 1
+  - name: TrainPrior
+    nprocess: 1
+  - name: BuildBlends
+    nprocess: 1
+  - name: TrainDeblender
+    nprocess: 1
+
+inputs:
+  isolated_cutouts: /pscratch/sd/l/laliotis/dbv/test1/data_dp2/isolated_cutouts
+  empty_cutouts: /pscratch/sd/l/laliotis/dbv/test1/data_dp2/empty_cutouts
+  psf_stats: /pscratch/sd/l/laliotis/dbv/test1/data_dp2/psf_stats.yml
+  noise_model: /pscratch/sd/l/laliotis/dbv/test1/data_dp2/noise_model.yml
+
+config: pipelines/config_test1.yaml
+resume: True
+output_dir: /pscratch/sd/l/laliotis/dbv/test1/train
+log_dir: /pscratch/sd/l/laliotis/dbv/test1/logs

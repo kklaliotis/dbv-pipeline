@@ -1,4 +1,4 @@
-import distutils.version
+import packaging.version
 import sys
 import inspect
 import pathlib
@@ -19,7 +19,7 @@ def find_module_versions():
             v = module.__version__
         else:
             continue
-        if isinstance(v, str) or isinstance(v, distutils.version.Version):
+        if isinstance(v, str) or isinstance(v, packaging.version.Version):
             versions[name] = str(v)
     return versions
 
