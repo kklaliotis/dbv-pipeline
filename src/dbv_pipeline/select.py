@@ -62,7 +62,7 @@ class SelectSources(PipelineStage):
 
         # DP2-cutouts keeps all its intermediate files in one working folder (its "data_root").
         work_dir = Path(self.config["work_dir"]) / "dp2_cutouts"
-        cfg = build_dp2_cutouts_config(self.config, work_dir)
+        cfg = build_dp2_cutouts_config(self.config, work_dir, label="config_SelectSources")
         print(f"DP2-cutouts working folder: {work_dir}")
 
         self.run_catalogue_steps(cfg)

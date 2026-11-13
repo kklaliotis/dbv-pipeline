@@ -27,3 +27,15 @@ def test_dp2_config(tmp_path):
         build_dp2_cutouts_config(dict(GLOBAL, dp2_cutouts=dict(bad, skybox=[0, 1, 0, 1])), tmp_path)
     with pytest.raises(ValueError, match="global"):
         build_dp2_cutouts_config(dict(GLOBAL, dp2_cutouts=dict(BLOCK, bands="gri")), tmp_path)
+
+
+def test_dp2_field_is_shared(tmp_path):
+    pytest.importorskip("dp2_cutouts")
+    from dbv_pipeline.utils.config import build_dp2_cutouts_config
+
+    field = {k: v for k, v in BLOCK.items() if k != "cuts"}
+    c = build_dp2_cutouts_config(dict(GLOBAL, dp2_field=field, dp2_cutouts={"cuts": {"snr_min": 5.0}}), tmp_path,
+                                 label="config_test")
+    assert c.name == "t" and c["cuts"]["snr_min"] == 5.0 and (tmp_path / "config_test.yaml").exists()
+    with pytest.raises(ValueError, match="both"):
+        build_dp2_cutouts_config(dict(GLOBAL, dp2_field=field, dp2_cutouts=dict(BLOCK)), tmp_path)
