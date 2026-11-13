@@ -1,5 +1,8 @@
 from .base import (
     ASDFFile,
+    BlendDataset,
+    DebvaderDataset,
+    ModelDirectory,
     DataFile,
     Directory,
     FileCollection,

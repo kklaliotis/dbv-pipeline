@@ -19,15 +19,17 @@ class SelectSources(PipelineStage):
     together with
         cut1_pass            Euclid counterpart is neither point-like nor spurious
         cut2_pass            one-to-one Euclid match and blending entropy S_b = 0 (isolation certified by Euclid)
-        rubin_deblend_pass   Rubin did not split the object from a neighbour: detect_isIsolated, or a blend
-                             that produced a single child (deblend_blendNChild == 1)
         cut6_pass            i-band cModel S/N above cuts.snr_min
-        selected             cut1 & cut2 & rubin_deblend & cut6: the isolated-galaxy sample at catalogue level
+        selected             cut1 & cut2 & cut6: the isolated-galaxy sample at catalogue level
+        rubin_deblend_pass   recorded for comparison, NOT part of `selected` unless require_rubin_deblend is true:
+                             Rubin did not split the object from a neighbour (detect_isIsolated, or a blend that
+                             produced a single child, deblend_blendNChild == 1)
     The pixel-level cuts (3, 4, 5, 7, 8 and the masking decision) are applied later, by MakeCutouts.
 
-    Note on the Rubin objects that enter: copaings keeps only objects with i_extendedness == 1 (it drops stars
-    and the objects whose i-band extendedness is NaN) and with i_cModel_mag <= copaings.mag_cut. That filter is
-    inside copaings.catalogs.build_lsst and is not decided here.
+    Which Rubin objects enter: those that pass the star-galaxy criterion configured in
+    dp2_cutouts.rubin.star_galaxy (a column of the Rubin object table and a threshold; default in the pipeline
+    config: griz_model_extendedness > 0.5) and have i_cModel_mag <= copaings.mag_cut. copaings applies this
+    filter before matching, so objects that fail it are not in the catalogue at all.
 
     Outputs
     -------
@@ -46,7 +48,7 @@ class SelectSources(PipelineStage):
         "psf_stamp_px": 35,         # global
         "split": dict,              # global
         "dp2_cutouts": dict,        # passed to DP2-cutouts (see utils.config.build_dp2_cutouts_config)
-        "require_rubin_deblend": True,   # include rubin_deblend_pass in `selected`
+        "require_rubin_deblend": False,  # also cut on rubin_deblend_pass (default: only record it)
         "montage_n": 24,            # stamps per QA montage; 0 disables the montages (they need the Butler)
         "montage_seed": 0,
     }
@@ -158,6 +160,7 @@ class SelectSources(PipelineStage):
 
     def summarise(self, cat, n_rubin_objects, euclid, cfg):
         import numpy as np
+        from dp2_cutouts.common import star_galaxy
 
         sel = cat["selected"].to_numpy(bool)
         c1, c2, c6 = (cat[k].to_numpy(bool) for k in ("cut1_pass", "cut2_pass", "cut6_pass"))
@@ -180,7 +183,7 @@ class SelectSources(PipelineStage):
         # used in the figure.
         funnel = {
             "Rubin objects in the box": int(n_rubin_objects),
-            "kept by copaings (i-band extended)": int(len(cat)),
+            f"galaxies: {star_galaxy.describe(cfg)}": int(len(cat)),
             "one-to-one Euclid counterpart": int(has.sum()),
             "cut 1: counterpart is a galaxy": int((has & c1).sum()),
             "cut 2: one-to-one and S_b = 0": int((c1 & c2).sum()),

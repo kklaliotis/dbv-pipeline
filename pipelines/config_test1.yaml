@@ -23,13 +23,24 @@ SelectSources:
     name: test1_ecdfs
     sky_box: [53.00, 53.30, -27.95, -27.70] # [ra_min, ra_max, dec_min, dec_max]; start with the demo box
     butler: {repo: dp2, collections: dp2, skymap: lsst_cells_v2}
-    rubin: {source: butler, tracts: [5063]}
+    rubin:
+      source: butler
+      tracts: [5063]
+      # Star-galaxy separation on the Rubin side (applied inside copaings; see dp2_cutouts/common/star_galaxy.py).
+      #   column:    any numeric column of the Rubin object table, or "none" for no Rubin-side cut
+      #   threshold: an object is kept as a galaxy if column > threshold
+      #   keep_nan:  keep objects where the column is NaN (default false)
+      # The previous behaviour was column i_extendedness, threshold 0.5.
+      star_galaxy: {column: griz_model_extendedness, threshold: 0.5}
     euclid: {hats_url: "hf://datasets/hugging-science/mmu_euclid_q1/euclid",
             margin_deg: 0.01, pa_convention: measured}
     copaings: {friendly_path: null, linking_length: 3.0, mag_cut: 35,
                 euclid_region: auto, eot_dense_max: 0, n_eot_tasks: 4, 
                 n_sb_tasks: 4}
     cuts: {snr_min: 5.0}
+  # Rubin's deblending flag (rubin_deblend_pass) is always recorded in the catalogue, for comparisons. Set this to
+  # true to also cut on it; for the science goal it is left out of the selection.
+  require_rubin_deblend: false
   montage_n: 24   # QA stamps per montage (small Butler reads); 0 disables
 
 MakeCutouts:
@@ -54,3 +65,45 @@ MakeCutouts:
       apply: [cut1, cut2, cut3, in_region, cut4, cut5, cut6, cut7, cut8, mask]
       mask_planes: [NO_DATA, SATURATED, COSMIC_RAY, INTERPOLATED, DETECTION_EDGE]
       n_empty_per_patch: 400
+
+# --- Stage sections below belong to stages that are still stubs ------------------------------------------------
+
+MeasurePSF:
+  fwhm_margin: 0.9
+
+MeasureNoise:
+  estimator: mad
+
+CheckKernels:
+  max_objects: 0              # 0 = every object
+
+TrainPrior:
+  run_name: prior
+  debvader:
+    data: {batch_size: 128, train_size: 0, validation_size: 0, seed: 42}
+    model: {latent_dim: 32, encoder_filters: [32, 64, 128, 256],
+            decoder_filters: [256, 128, 64, 32], output_activation: relu}
+    training: {epochs: 500, learning_rate: 1.0e-4, optimizer: adam,
+               annealing_epochs: 20, kl_start_value: 0.0, checkpoint_every: 10}
+
+BuildBlends:
+  n_train_scenes: 100000
+  n_eval_scenes: 10000
+  dmag: [-1.0, 3.0]
+  theta: [0.325, 3.0]
+  seed: 0
+
+TrainDeblender:
+  run_name: deblender
+  debvader:
+    data: {batch_size: 128, train_size: 0, validation_size: 0, seed: 42}
+    model: {latent_dim: 32, encoder_filters: [32, 64, 128, 256],
+            decoder_filters: [256, 128, 64, 32], output_activation: relu}
+    training: {epochs: 300, learning_rate: 1.0e-4, optimizer: adam,
+               annealing_epochs: 0, checkpoint_every: 10}
+
+RunDeblender:
+  batch_size: 512
+
+Evaluate:
+  chi2_flag: 1.5

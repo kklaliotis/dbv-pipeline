@@ -407,6 +407,37 @@ class Directory(DataFile):
         return provenance
 
 
+class DebvaderDataset(Directory):
+    """
+    A dataset directory in the debvader format (docs/IMPLEMENTATION_GUIDE.md, section 4.1): arrays of stamps,
+    variance, mask and PSF stamps, one row per object, plus meta.npz, stats.json and dataset.json.
+    """
+
+    required = ("images.npy", "variance.npy", "mask.npy", "psf.npy", "meta.npz", "stats.json", "dataset.json")
+
+    def validate(self):
+        missing = [f for f in self.required if not (self.file / f).exists()]
+        if missing:
+            raise FileValidationError(f"{self.path} lacks {missing}")
+
+
+class BlendDataset(DebvaderDataset):
+    """A DebvaderDataset of blended scenes: images.npy is the scene, targets.npy what the deblender must recover."""
+
+    required = DebvaderDataset.required + ("targets.npy",)
+
+
+class ModelDirectory(Directory):
+    """A trained model: weights, the debvader configuration it was built from, and a model card."""
+
+    required = ("weights.h5", "config.json", "model_card.json")
+
+    def validate(self):
+        missing = [f for f in self.required if not (self.file / f).exists()]
+        if missing:
+            raise FileValidationError(f"{self.path} lacks {missing}")
+
+
 class FileCollection(Directory):
     """
     Represents a grouped bundle of files, for cases where you don't
