@@ -218,3 +218,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local implementation guide: kept on disk, not tracked
+docs/IMPLEMENTATION_GUIDE.md
