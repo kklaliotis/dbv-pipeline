@@ -115,3 +115,19 @@ def rgb_montage(stamps, titles, ncols, suptitle, pixel_scale, stretch=None, q=8.
                  x=0.01, ha="left", fontsize=10, fontweight="bold")
     fig.tight_layout(rect=(0, 0, 1, 0.99))
     return fig
+
+def make_cutout_montage(stamps, ncols, pixel_scale, suptitle, empty=False):
+    """Montage of cutouts for a selection catalogue.
+
+    catalog: DataFrame with the selection catalogue, including the columns "id" and "selected".
+    stamps: list of (3, H, W) arrays ordered red, green, blue channel (e.g. i, r, g bands), or None for a
+    stamp that could not be read. A common asinh stretch is used so that brightness is comparable between
+    panels; `stretch` defaults to a robust multiple of the sky noise.
+    """
+    if empty:
+        titles = [f"empty" for _ in stamps]
+    else:
+        titles = [f"selected" for _ in stamps]
+
+    return rgb_montage(stamps, titles, ncols, suptitle, pixel_scale)
+
