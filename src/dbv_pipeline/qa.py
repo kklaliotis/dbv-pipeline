@@ -131,3 +131,68 @@ def make_cutout_montage(stamps, ncols, pixel_scale, suptitle, empty=False):
 
     return rgb_montage(stamps, titles, ncols, suptitle, pixel_scale)
 
+def make_psf_qa(self, g_int, fwhm, checks):
+        """
+        Make QA plots for the PSF FWHM distributions. We want:
+         - FWHM histogram per band with the configured and suggested G_int marked
+         - PSF ellipticity histogram per band 
+         
+         Parameters
+         ----------
+         g_int : list or float
+            The configured internal PSF parameters (G_int) per band
+         fwhm : numpy.ndarray, shape (N, C)
+            The measured FWHM values for each object (N) and band (C).
+         checks : dict of dicts {band: check}
+            The checks for each band, including the configured and suggested G_int values.
+         qa_out : str or pathlib.Path
+             The path to the output QA directory.
+
+        Returns
+        -------
+        fig_fwhm : matplotlib.figure.Figure
+            The figure object for the FWHM histogram.
+        fig_ellip : matplotlib.figure.Figure
+            The figure object for the PSF ellipticity histogram.
+         """
+
+        plt = style()
+        fig_fwhm, ax_fwhm = plt.subplots(figsize=(6, 4))
+        fig_ellip, ax_ellip = plt.subplots(figsize=(6, 4))
+
+        # FWHM histogram
+        for c in range(fwhm.shape[1]):
+            ax_fwhm.hist(fwhm[:, c], bins=30, alpha=0.5, label=f"Band {c}", color=SERIES[c % len(SERIES)])
+            
+            # Mark the configured and suggested G_int
+            if isinstance(g_int, list):
+                g_int_band = g_int[c] if 0 <= c < len(g_int) else 0.0
+            else:
+                g_int_band = g_int
+            suggested_g_int = checks.get(c, {}).get("suggested_internal_psf", {}).get(c, None)
+            
+            if g_int_band > 0:
+                ax_fwhm.axvline(g_int_band, color=SERIES[c % len(SERIES)], linestyle="--", lw=1.5,
+                                label=f"Configured G_int (Band {c})")
+            if suggested_g_int is not None:
+                ax_fwhm.axvline(suggested_g_int, color=SERIES[c % len(SERIES)], linestyle=":", lw=1.5,
+                                label=f"Suggested G_int (Band {c})")
+
+        ax_fwhm.set_xlabel("PSF FWHM (arcsec)")
+        ax_fwhm.set_ylabel("Number of objects") 
+        ax_fwhm.legend()
+        ax_fwhm.grid(True)
+
+        # PSF ellipticity histogram
+        for c in range(fwhm.shape[1]):
+            ellipticity = np.sqrt(1 - (fwhm[:, c] / fwhm[:, c].max())**2)  # Simplified ellipticity measure
+            ax_ellip.hist(ellipticity, bins=30, alpha=0.5, label=f"Band {c}", color=SERIES[c % len(SERIES)])
+        ax_ellip.set_xlabel("PSF Ellipticity")
+        ax_ellip.set_ylabel("Number of objects")
+        ax_ellip.legend()
+        ax_ellip.grid(True)
+
+        return fig_fwhm, fig_ellip
+        
+        
+
