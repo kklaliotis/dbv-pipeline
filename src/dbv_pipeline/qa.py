@@ -131,7 +131,7 @@ def make_cutout_montage(stamps, ncols, pixel_scale, suptitle, empty=False):
 
     return rgb_montage(stamps, titles, ncols, suptitle, pixel_scale)
 
-def make_psf_qa(self, g_int, fwhm, checks):
+def make_psf_qa(g_int, fwhm, checks):
         """
         Make QA plots for the PSF FWHM distributions. We want:
          - FWHM histogram per band with the configured and suggested G_int marked
@@ -194,5 +194,65 @@ def make_psf_qa(self, g_int, fwhm, checks):
 
         return fig_fwhm, fig_ellip
         
-        
+def make_noise_qa(whitened, f_b):
+    """
+    Make QA plots for the noise measurement. We want:
+    - Histogram of whitened pixels per band, compared against a unit Gaussian
+    - Chi-squared per pixel before and after applying the noise factor f_b
+    - Noise factor (mean and MAD) per band
 
+    Parameters
+    ----------
+    whitened : np.ndarray
+        The whitened pixels, shape (N, H, W, C), with masked pixels set to NaN.
+    f_b : np.ndarray
+        The noise factor (mean or MAD) per band.
+    noise_qa_out : str or pathlib.Path
+        The path to the output QA directory.
+
+    Returns
+    -------
+    fig_whitened : matplotlib.figure.Figure
+        The figure object for the whitened pixels histogram.
+    fig_chi2 : matplotlib.figure.Figure
+        The figure object for the chi-squared histogram.
+    fig_noise_factor : matplotlib.figure.Figure
+        The figure object for the noise factor scatter plot.   
+    """
+    from scipy.stats import norm
+
+    plt = style()
+    fig_whitened, ax_whitened = plt.subplots(figsize=(6, 4))
+    fig_chi2, ax_chi2 = plt.subplots(figsize=(6, 4))
+
+    # Histogram of whitened pixels per band, compared against a unit Gaussian
+    for c in range(whitened.shape[3]):
+        ax_whitened.hist(whitened[:, :, :, c].flatten(), bins=30, alpha=0.5, label=f"Band {c}", color=SERIES[c % len(SERIES)])
+        # Overlay a unit Gaussian
+        x = np.linspace(whitened[:, :, :, c].min(), whitened[:, :, :, c].max(), 100)
+        ax_whitened.plot(x, len(whitened[:, :, :, c].flatten()) * norm.pdf(x, loc=0, scale=1) * (whitened[:, :, :, c].max() - whitened[:, :, :, c].min()) / 30, 'r--', label=f"Unit Gaussian (Band {c})")
+    ax_whitened.set_xlabel("Whitened Pixels")
+    ax_whitened.set_ylabel("Number of Pixels")
+    ax_whitened.legend()
+    ax_whitened.grid(True)
+
+    # Chi-squared per pixel before and after applying the noise factor f_b
+    for c in range(whitened.shape[3]):
+        chi2_before = (whitened[:, :, :, c] ** 2).sum()
+        chi2_after = (whitened[:, :, :, c] ** 2 / f_b[c]).sum()
+        ax_chi2.bar(c, chi2_before, label=f"Before (Band {c})", color=SERIES[c % len(SERIES)])
+        ax_chi2.bar(c + 0.5, chi2_after, label=f"After (Band {c})", color=SERIES[c % len(SERIES)])
+    ax_chi2.set_xlabel("Band")
+    ax_chi2.set_ylabel("Chi-squared per Pixel")
+    ax_chi2.legend()
+    ax_chi2.grid(True)
+
+    # Scatterplot of noise factor (mean and MAD) per band
+    fig_noise_factor, ax_noise_factor = plt.subplots(figsize=(6, 4))
+    ax_noise_factor.scatter(range(len(f_b)), f_b, color=SERIES[:len(f_b)], label="Noise Factor (Mean and MAD)")
+    ax_noise_factor.set_xlabel("Band")
+    ax_noise_factor.set_ylabel("Noise Factor")
+    ax_noise_factor.legend()
+    ax_noise_factor.grid(True)
+
+    return fig_whitened, fig_chi2, fig_noise_factor

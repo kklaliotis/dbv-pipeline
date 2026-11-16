@@ -91,3 +91,18 @@ def rename_iterated(it, renames):
                 # delete the old column
                 del data[old]
         yield s, e, data
+
+def write_yaml(self, path, data):
+        """
+        Write a dictionary to a YAML file.
+        
+        Parameters
+        ----------
+        path : str or pathlib.Path
+            The path to the output YAML file.
+        data : dict
+            The data to write to the YAML file.
+        """
+        import yaml
+        with open(path, "w") as f:
+            yaml.dump(data, f)

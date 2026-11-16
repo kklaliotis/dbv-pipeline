@@ -39,6 +39,8 @@ class MeasurePSF(PipelineStage):
         """
         Run the PSF measurement and validation.
         """
+        from .utils.misc import write_yaml
+
         isolated_dir = self.get_input("isolated_cutouts")
         psf_stats_out = self.get_output("psf_stats")
         qa_out = self.get_output("qa_psf")
@@ -58,7 +60,7 @@ class MeasurePSF(PipelineStage):
                     {band: check["suggested_internal_psf"].get(band, None) for band, check in checks.items()},
                     "ok (per band)": {band: check["ok"] for band, check in checks.items()}}
         
-        self.write_yaml(psf_stats_out, psf_info)
+        write_yaml(psf_stats_out, psf_info)
         self.make_qa_figs(fwhm, checks, qa_out)
 
         # Read the checks and raise errors/warnings as needed
@@ -187,22 +189,6 @@ class MeasurePSF(PipelineStage):
             checks[band] = check
 
         return checks
-
-    def write_yaml(self, path, data):
-        """
-        Write the percentiles per band, the configured G_int, a suggested per-band FWHM,
-        and status of checks passage to a yaml file.
-
-        Parameters
-        ----------
-        path : str or pathlib.Path
-            The path to the output YAML file.
-        data : dict
-            The data to write to the YAML file.
-        """
-        import yaml
-        with open(path, "w") as f:
-            yaml.dump(data, f)
 
     def make_qa_figs(self, fwhm, checks, qa_out):
         """
