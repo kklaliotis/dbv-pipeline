@@ -19,8 +19,10 @@ AXIS = "#c3c2b7"
 
 def style():
     """Apply the shared matplotlib style. Call once at the start of a stage's QA."""
+    import sys
     import matplotlib
-    matplotlib.use("Agg")
+    if "ipykernel" not in sys.modules:      # in a notebook keep the inline backend, so that figures are shown
+        matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     plt.rcParams.update({
         "figure.facecolor": SURFACE, "axes.facecolor": SURFACE, "savefig.facecolor": SURFACE,
@@ -131,74 +133,92 @@ def make_cutout_montage(stamps, ncols, pixel_scale, suptitle, empty=False):
 
     return rgb_montage(stamps, titles, ncols, suptitle, pixel_scale)
 
-def make_psf_qa(g_int, fwhm, checks):
-        """
-        Make QA plots for the PSF FWHM distributions. We want:
-         - FWHM histogram per band with the configured and suggested G_int marked
-         - PSF ellipticity histogram per band 
-         
-         Parameters
-         ----------
-         g_int : list or float
-            The configured internal PSF parameters (G_int) per band
-         fwhm : numpy.ndarray, shape (N, C)
-            The measured FWHM values for each object (N) and band (C).
-         checks : dict of dicts {band: check}
-            The checks for each band, including the configured and suggested G_int values.
-         qa_out : str or pathlib.Path
-             The path to the output QA directory.
+def make_cutout_qa(dataset_dir, bands, pixel_scale, n=24, ncols=6, seed=0, empty=False):
+    """Colour montage (i, r, g) of `n` random stamps of a DebvaderDataset directory.
 
-        Returns
-        -------
-        fig_fwhm : matplotlib.figure.Figure
-            The figure object for the FWHM histogram.
-        fig_ellip : matplotlib.figure.Figure
-            The figure object for the PSF ellipticity histogram.
-         """
+    Returns the figure, or None when the dataset has no stamps or lacks one of the g, r, i bands.
+    """
+    from pathlib import Path
+    dataset_dir = Path(dataset_dir)
+    rgb = [b for b in ("i", "r", "g") if b in bands]
+    if len(rgb) != 3:
+        return None
+    images = np.load(dataset_dir / "images.npy", mmap_mode="r")    # (N, H, W, C)
+    if len(images) == 0:
+        return None
+    rng = np.random.default_rng(seed)
+    pick = np.sort(rng.choice(len(images), size=min(n, len(images)), replace=False))
+    channels = [list(bands).index(b) for b in rgb]
+    stamps = [np.moveaxis(np.asarray(images[k][..., channels], float), -1, 0) for k in pick]
+    kind = "empty-sky" if empty else "isolated"
+    return make_cutout_montage(stamps, ncols, pixel_scale, f"{len(stamps)} random {kind} stamps of {len(images):,}",
+                               empty=empty)
 
-        plt = style()
-        fig_fwhm, ax_fwhm = plt.subplots(figsize=(6, 4))
-        fig_ellip, ax_ellip = plt.subplots(figsize=(6, 4))
 
-        # FWHM histogram
-        for c in range(fwhm.shape[1]):
-            ax_fwhm.hist(fwhm[:, c], bins=30, alpha=0.5, label=f"Band {c}", color=SERIES[c % len(SERIES)])
-            
-            # Mark the configured and suggested G_int
-            if isinstance(g_int, list):
-                g_int_band = g_int[c] if 0 <= c < len(g_int) else 0.0
-            else:
-                g_int_band = g_int
-            suggested_g_int = checks.get(c, {}).get("suggested_internal_psf", {}).get(c, None)
-            
-            if g_int_band > 0:
-                ax_fwhm.axvline(g_int_band, color=SERIES[c % len(SERIES)], linestyle="--", lw=1.5,
-                                label=f"Configured G_int (Band {c})")
-            if suggested_g_int is not None:
-                ax_fwhm.axvline(suggested_g_int, color=SERIES[c % len(SERIES)], linestyle=":", lw=1.5,
-                                label=f"Suggested G_int (Band {c})")
+def make_psf_qa(fwhm, ellipticity, checks, bands):
+    """
+    Make QA plots for the PSF FWHM distributions. We want:
+     - FWHM histogram per band with the configured and suggested G_int marked
+     - PSF ellipticity histogram per band
 
-        ax_fwhm.set_xlabel("PSF FWHM (arcsec)")
-        ax_fwhm.set_ylabel("Number of objects") 
-        ax_fwhm.legend()
-        ax_fwhm.grid(True)
+    Parameters
+    ----------
+    fwhm : numpy.ndarray, shape (N, C)
+        The measured FWHM values for each object (N) and band (C), arcsec.
+    ellipticity : numpy.ndarray, shape (N, C)
+        The PSF ellipticity of each object and band.
+    checks : dict of dicts {band: check}
+        The checks for each band: check["fwhm"] is the configured G_int FWHM, check["suggested_fwhm"] the
+        suggested one.
+    bands : list of str
 
-        # PSF ellipticity histogram
-        for c in range(fwhm.shape[1]):
-            ellipticity = np.sqrt(1 - (fwhm[:, c] / fwhm[:, c].max())**2)  # Simplified ellipticity measure
-            ax_ellip.hist(ellipticity, bins=30, alpha=0.5, label=f"Band {c}", color=SERIES[c % len(SERIES)])
-        ax_ellip.set_xlabel("PSF Ellipticity")
-        ax_ellip.set_ylabel("Number of objects")
-        ax_ellip.legend()
-        ax_ellip.grid(True)
+    Returns
+    -------
+    fig_fwhm : matplotlib.figure.Figure
+        One panel per band: FWHM histogram, configured (dashed) and suggested (dotted) G_int.
+    fig_ellip : matplotlib.figure.Figure
+        The PSF ellipticity histogram, one line per band.
+    """
+    plt = style()
+    C = len(bands)
+    ncols = min(C, 3)
+    nrows = int(np.ceil(C / ncols))
+    fig_fwhm, axes = plt.subplots(nrows, ncols, figsize=(3.4 * ncols, 2.8 * nrows), squeeze=False)
+    for ax in axes.ravel()[C:]:
+        ax.set_axis_off()
+    lo = min(np.nanmin(fwhm), min(c["fwhm"] for c in checks.values())) * 0.9
+    hi = np.nanmax(fwhm) * 1.05
+    bins = np.linspace(lo, hi, 40)
+    for c, (ax, band) in enumerate(zip(axes.ravel(), bands)):
+        color = SERIES[c % len(SERIES)]
+        step_hist(ax, fwhm[:, c], bins, color, f"{band} PSF", fill=True)
+        ax.axvline(checks[band]["fwhm"], color=INK, ls="--", lw=1.2, label="configured G_int")
+        ax.axvline(checks[band]["suggested_fwhm"], color=NEUTRAL, ls=":", lw=1.5, label="suggested G_int")
+        ax.set_title(f"{band}" + ("" if checks[band]["ok"] else "  (FAILED)"))
+        ax.set_xlabel("PSF FWHM [arcsec]")
+        if c % ncols == 0:
+            ax.set_ylabel("objects")
+    axes.ravel()[0].legend(loc="upper right", fontsize=7)
+    fig_fwhm.suptitle("PSF FWHM per band against the internal PSF", x=0.01, ha="left", fontweight="bold")
+    fig_fwhm.tight_layout()
 
-        return fig_fwhm, fig_ellip
-        
-def make_noise_qa(whitened, f_b):
+    fig_ellip, ax = plt.subplots(figsize=(6, 4))
+    bins = np.linspace(0, max(0.05, float(np.nanpercentile(ellipticity, 99.5)) * 1.1), 40)
+    for c, band in enumerate(bands):
+        step_hist(ax, ellipticity[:, c], bins, SERIES[c % len(SERIES)], band, lw=1.6)
+    ax.set_xlabel("PSF ellipticity |e| (Gaussian-weighted moments)")
+    ax.set_ylabel("objects")
+    ax.set_title("PSF ellipticity per band")
+    ax.legend(ncols=2)
+
+    return fig_fwhm, fig_ellip
+
+
+def make_noise_qa(whitened, f_b, f_mean, f_mad, bands):
     """
     Make QA plots for the noise measurement. We want:
     - Histogram of whitened pixels per band, compared against a unit Gaussian
-    - Chi-squared per pixel before and after applying the noise factor f_b
+    - Chi-squared per pixel of each stamp, before and after applying the noise factor f_b
     - Noise factor (mean and MAD) per band
 
     Parameters
@@ -206,53 +226,76 @@ def make_noise_qa(whitened, f_b):
     whitened : np.ndarray
         The whitened pixels, shape (N, H, W, C), with masked pixels set to NaN.
     f_b : np.ndarray
-        The noise factor (mean or MAD) per band.
-    noise_qa_out : str or pathlib.Path
-        The path to the output QA directory.
+        The noise factor used downstream, per band.
+    f_mean, f_mad : np.ndarray
+        The plain and robust estimators, per band.
+    bands : list of str
 
     Returns
     -------
     fig_whitened : matplotlib.figure.Figure
         The figure object for the whitened pixels histogram.
     fig_chi2 : matplotlib.figure.Figure
-        The figure object for the chi-squared histogram.
+        The figure object for the per-stamp chi-squared histograms.
     fig_noise_factor : matplotlib.figure.Figure
-        The figure object for the noise factor scatter plot.   
+        The figure object for the noise factors per band.
     """
     from scipy.stats import norm
 
     plt = style()
-    fig_whitened, ax_whitened = plt.subplots(figsize=(6, 4))
-    fig_chi2, ax_chi2 = plt.subplots(figsize=(6, 4))
+    C = whitened.shape[3]
+    ncols = min(C, 3)
+    nrows = int(np.ceil(C / ncols))
 
-    # Histogram of whitened pixels per band, compared against a unit Gaussian
-    for c in range(whitened.shape[3]):
-        ax_whitened.hist(whitened[:, :, :, c].flatten(), bins=30, alpha=0.5, label=f"Band {c}", color=SERIES[c % len(SERIES)])
-        # Overlay a unit Gaussian
-        x = np.linspace(whitened[:, :, :, c].min(), whitened[:, :, :, c].max(), 100)
-        ax_whitened.plot(x, len(whitened[:, :, :, c].flatten()) * norm.pdf(x, loc=0, scale=1) * (whitened[:, :, :, c].max() - whitened[:, :, :, c].min()) / 30, 'r--', label=f"Unit Gaussian (Band {c})")
-    ax_whitened.set_xlabel("Whitened Pixels")
-    ax_whitened.set_ylabel("Number of Pixels")
-    ax_whitened.legend()
-    ax_whitened.grid(True)
+    # Histogram of whitened pixels per band (density, log scale to show the tails), against a unit Gaussian
+    fig_whitened, axes = plt.subplots(nrows, ncols, figsize=(3.4 * ncols, 2.8 * nrows), squeeze=False)
+    bins = np.linspace(-6, 6, 97)
+    x = 0.5 * (bins[1:] + bins[:-1])
+    for c, ax in enumerate(axes.ravel()):
+        if c >= C:
+            ax.set_axis_off()
+            continue
+        step_hist(ax, whitened[..., c], bins, SERIES[c % len(SERIES)], f"{bands[c]}", density=True, fill=True)
+        ax.plot(x, norm.pdf(x), color=INK, lw=1.0, ls="--", label="N(0, 1)")
+        ax.plot(x, norm.pdf(x, scale=np.sqrt(f_b[c])), color=NEUTRAL, lw=1.0, ls=":",
+                label=f"N(0, f_b = {f_b[c]:.3f})")
+        ax.set_yscale("log")
+        ax.set_ylim(1e-5, 1)
+        ax.set_xlabel("image / sqrt(variance)")
+        ax.legend(loc="upper right", fontsize=7)
+    fig_whitened.suptitle("Whitened empty-sky pixels", x=0.01, ha="left", fontweight="bold")
+    fig_whitened.tight_layout()
 
-    # Chi-squared per pixel before and after applying the noise factor f_b
-    for c in range(whitened.shape[3]):
-        chi2_before = (whitened[:, :, :, c] ** 2).sum()
-        chi2_after = (whitened[:, :, :, c] ** 2 / f_b[c]).sum()
-        ax_chi2.bar(c, chi2_before, label=f"Before (Band {c})", color=SERIES[c % len(SERIES)])
-        ax_chi2.bar(c + 0.5, chi2_after, label=f"After (Band {c})", color=SERIES[c % len(SERIES)])
-    ax_chi2.set_xlabel("Band")
-    ax_chi2.set_ylabel("Chi-squared per Pixel")
-    ax_chi2.legend()
-    ax_chi2.grid(True)
+    # Chi-squared per pixel of each stamp, before and after applying the noise factor f_b
+    with np.errstate(invalid="ignore"):
+        chi2 = np.nanmean(whitened**2, axis=(1, 2))             # (N, C)
+    fig_chi2, axes = plt.subplots(nrows, ncols, figsize=(3.4 * ncols, 2.8 * nrows), squeeze=False)
+    finite = chi2[np.isfinite(chi2)]
+    hi = float(np.percentile(finite, 99.5)) * 1.1 if finite.size else 2.0
+    bins = np.linspace(0, max(hi, 1.5), 50)
+    for c, ax in enumerate(axes.ravel()):
+        if c >= C:
+            ax.set_axis_off()
+            continue
+        step_hist(ax, chi2[:, c], bins, NEUTRAL, "before f_b")
+        step_hist(ax, chi2[:, c] / f_b[c], bins, SERIES[c % len(SERIES)], "after f_b", fill=True)
+        ax.axvline(1.0, color=INK, lw=1.0, ls="--")
+        ax.set_title(bands[c])
+        ax.set_xlabel("chi2 / pixel of a stamp")
+        ax.legend(loc="upper right", fontsize=7)
+    fig_chi2.suptitle("Empty-sky chi2 per pixel, model = 0", x=0.01, ha="left", fontweight="bold")
+    fig_chi2.tight_layout()
 
-    # Scatterplot of noise factor (mean and MAD) per band
-    fig_noise_factor, ax_noise_factor = plt.subplots(figsize=(6, 4))
-    ax_noise_factor.scatter(range(len(f_b)), f_b, color=SERIES[:len(f_b)], label="Noise Factor (Mean and MAD)")
-    ax_noise_factor.set_xlabel("Band")
-    ax_noise_factor.set_ylabel("Noise Factor")
-    ax_noise_factor.legend()
-    ax_noise_factor.grid(True)
+    # Noise factor per band, both estimators
+    fig_noise_factor, ax = plt.subplots(figsize=(6, 3.6))
+    xb = np.arange(C)
+    ax.plot(xb, f_mean, "o", color=SERIES[0], label="mean of squares")
+    ax.plot(xb, f_mad, "s", color=SERIES[1], label="robust (MAD)")
+    ax.axhline(1.0, color=NEUTRAL, lw=1.0, ls="--")
+    ax.set_xticks(xb, bands)
+    ax.set_xlabel("band")
+    ax.set_ylabel("noise factor f_b")
+    ax.set_title("Noise factor per band")
+    ax.legend()
 
     return fig_whitened, fig_chi2, fig_noise_factor

@@ -17,62 +17,70 @@ class MeasureNoise(PipelineStage):
     Outputs
     -------
     noise_model : yaml with noise_factor per band (and the plain and robust estimators, lag-1 correlation)
-    noise_qa    : histograms of whitened pixels against a unit Gaussian; chi2 per pixel before and after f_b
+    qa_noise    : histograms of whitened pixels against a unit Gaussian; chi2 per pixel before and after f_b
 
     """
 
     name = "MeasureNoise"
     inputs = [("empty_cutouts", DebvaderDataset)]
-    outputs = [("noise_model", YamlFile), ("noise_qa", Directory)]
+    outputs = [("noise_model", YamlFile), ("qa_noise", Directory)]
     config_options = {
-        "bands": [str],             
+        "bands": [str],
         "estimator": "mad",         # "mad" (robust, default) or "mean"
-        "n_stamps": int,
         "likelihood": "measured_noise"  # "measured_noise" (default) or "variance"
     }
 
     def run(self):
+        from pathlib import Path
         from .utils.misc import write_yaml
 
-        empty_dir = self.get_input("empty_cutouts")
+        if self.config["estimator"] not in ("mad", "mean"):
+            raise ValueError(f"estimator must be 'mad' or 'mean', got {self.config['estimator']!r}")
+
+        # ceci gives paths as strings; the Directory output must be created (open_output does that).
+        empty_dir = Path(self.get_input("empty_cutouts"))
+        noise_model_out = self.get_output("noise_model")
+        qa_noise_out = Path(self.open_output("qa_noise", wrapper=True).path)
 
         # compute the whitened pixels
-        whitened = self.whiten_empty_stamps(empty_dir)         # image / sqrt(variance), masked pixels removed
-        f_mean, f_mad = self.noise_factors(whitened)                            # per band
+        whitened = self.whiten_empty_stamps(empty_dir)         # image / sqrt(variance), masked pixels -> NaN
+        if whitened.shape[-1] != len(self.config["bands"]):
+            raise ValueError(f"{empty_dir} has {whitened.shape[-1]} bands, the configuration {self.config['bands']}")
+        f_mean, f_mad = self.compute_noise_factors(whitened)                    # per band
         f_b = f_mean if self.config["estimator"] == "mean" else f_mad
 
-        correlations = self.compute_lag1_correlation(whitened)
+        lag1_x, lag1_y = self.compute_lag1_correlation(whitened)
 
         info = {
-            "bands": self.cfg["bands"],
+            "bands": list(self.config["bands"]),
             "noise_factor": f_b,
+            "estimator": self.config["estimator"],
             "noise_factor_mean": f_mean,
             "noise_factor_mad": f_mad,
-            "lag1_corr": correlations,
-            "whitened_mean": np.nanmean(whitened, axis=(0, 1, 2)).tolist(),
-            "n_stamps": self.cfg["n_stamps"],
-            "likelihood": self.cfg["likelihood"]
+            "lag1_corr_x": lag1_x,
+            "lag1_corr_y": lag1_y,
+            "whitened_mean": np.nanmean(whitened, axis=(0, 1, 2)),
+            "n_stamps": int(whitened.shape[0]),
+            "n_good_pixels": np.isfinite(whitened).sum(axis=(0, 1, 2)),
+            "likelihood": self.config["likelihood"]
         }
 
-        noise_model_out = self.get_output("noise_model")
-        noise_qa_out = self.get_output("noise_qa")
+        write_yaml(noise_model_out, info)
+        self.plot_noise_qa(whitened, f_b, f_mean, f_mad, qa_noise_out)  # make QA plots for the noise measurement
 
-        write_yaml(info, noise_model_out.path)
-        self.plot_noise_qa(whitened, f_b)  # make QA plots for the noise measurement
+        print(f"Noise model written to {noise_model_out} and QA plots to {qa_noise_out}")
 
-        print(f"Noise model written to {noise_model_out.path} and QA plots to {noise_qa_out.path}")
 
-        
 
     def whiten_empty_stamps(self, empty_dir):
         """
-        Read the empty-sky cutouts and return the whitened pixels (image / sqrt(variance)) with masked 
+        Read the empty-sky cutouts and return the whitened pixels (image / sqrt(variance)) with masked
         pixels removed.
 
         Parameters
         ----------
-        empty_dir : DebvaderDataset
-            The DebvaderDataset of empty-sky cutouts, with images.npy, variances.npy, and mask.npy.
+        empty_dir : pathlib.Path
+            The DebvaderDataset directory of empty-sky cutouts, with images.npy, variance.npy, and mask.npy.
 
         Returns
         -------
@@ -80,18 +88,18 @@ class MeasureNoise(PipelineStage):
             The whitened pixels, shape (N, H, W, C), with masked pixels set to NaN.
         """
         # read the images.npy from the empty_dir DebvaderDataset
-        images_path = empty_dir.path / "images.npy"
-        images = np.load(images_path)  # shape (N, H, W, C) 
+        images = np.load(empty_dir / "images.npy")  # shape (N, H, W, C)
 
-        # read the variances.npy from the empty_dir DebvaderDataset
-        variances_path = empty_dir.path / "variances.npy"
-        variances = np.load(variances_path)  # shape (N, H, W, C)
+        # read the variance.npy from the empty_dir DebvaderDataset
+        variances = np.load(empty_dir / "variance.npy")  # shape (N, H, W, C)
 
         # read the mask.npy from the empty_dir DebvaderDataset
-        mask_path = empty_dir.path / "mask.npy"
-        mask = np.load(mask_path)  # shape (N, H, W, C), bool, True = ignore this pixel
+        mask = np.load(empty_dir / "mask.npy")  # shape (N, H, W, C), bool, True = ignore this pixel
 
-        return np.where(mask, np.nan, images / np.sqrt(variances))  # whitened; masked pixels set to NaN
+        # The mask already covers non-finite and non-positive variance; the second test only keeps sqrt quiet.
+        bad = mask | ~(np.isfinite(variances) & (variances > 0)) | ~np.isfinite(images)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            return np.where(bad, np.nan, images / np.sqrt(variances))  # whitened; masked pixels set to NaN
 
     def compute_noise_factors(self, whitened):
         """
@@ -118,11 +126,12 @@ class MeasureNoise(PipelineStage):
         med = np.nanmedian(flat, axis=0)
         f_mad = (np.nanmedian(np.abs(flat - med), axis=0) * 1.4826)**2  # MAD estimator of variance
 
-        return f_mean, f_mad  # each shape (N_bands,) 
+        return f_mean, f_mad  # each shape (N_bands,)
 
     def compute_lag1_correlation(self, whitened):
         """
-        Compute the lag-1 pixel correlation for each band from the whitened pixels.
+        Compute the lag-1 pixel correlation for each band from the whitened pixels, along rows (x) and along
+        columns (y). Only pairs of neighbouring pixels in the same stamp where both pixels are valid are used.
 
         Parameters
         ----------
@@ -131,25 +140,22 @@ class MeasureNoise(PipelineStage):
 
         Returns
         -------
-        correlations : np.ndarray
-            The lag-1 pixel correlation per band.
+        corr_x, corr_y : np.ndarray
+            The lag-1 pixel correlation per band, shape (N_bands,) each.
         """
-        # flatten the whitened pixels to (N_pixels, N_bands)
-        flat = whitened.reshape(-1, whitened.shape[-1])  # shape (N_pixels, N_bands)
+        def corr(a, b):
+            out = []
+            for c in range(a.shape[-1]):
+                x, y = a[..., c].ravel(), b[..., c].ravel()
+                ok = np.isfinite(x) & np.isfinite(y)
+                out.append(np.corrcoef(x[ok], y[ok])[0, 1] if ok.sum() > 2 else np.nan)
+            return np.array(out)
 
-        correlations = []
-        for b in range(flat.shape[1]):
-            band_pixels = flat[:, b]
-            valid = ~np.isnan(band_pixels)
-            if np.sum(valid) < 2:
-                correlations.append(np.nan)
-                continue
-            x = band_pixels[valid]
-            corr = np.corrcoef(x[:-1], x[1:])[0, 1]  # lag-1 correlation
-            correlations.append(corr)
-        return np.array(correlations)  #shape (N_bands,)
+        corr_x = corr(whitened[:, :, :-1, :], whitened[:, :, 1:, :])   # neighbours along a row
+        corr_y = corr(whitened[:, :-1, :, :], whitened[:, 1:, :, :])   # neighbours along a column
+        return corr_x, corr_y
 
-    def plot_noise_qa(self, whitened, f_b):
+    def plot_noise_qa(self, whitened, f_b, f_mean, f_mad, qa_dir):
         """
         Make QA plots for the noise measurement.
 
@@ -158,7 +164,11 @@ class MeasureNoise(PipelineStage):
         whitened : np.ndarray
             The whitened pixels, shape (N, H, W, C), with masked pixels set to NaN.
         f_b : np.ndarray
-            The noise factors per band.
+            The noise factors per band (the ones used downstream).
+        f_mean, f_mad : np.ndarray
+            The two estimators, per band.
+        qa_dir : pathlib.Path
+            The QA output directory.
 
         Returns
         -------
@@ -166,11 +176,11 @@ class MeasureNoise(PipelineStage):
         """
         from .qa import make_noise_qa, save
 
-        fig_white, fig_chi2, fig_noise_factor = make_noise_qa(whitened, f_b)
+        fig_white, fig_chi2, fig_noise_factor = make_noise_qa(whitened, f_b, f_mean, f_mad,
+                                                              list(self.config["bands"]))
 
-        save(fig_white, self.get_output("noise_qa").path, "whitened_histograms")
-        save(fig_chi2, self.get_output("noise_qa").path, "chi2_per_pixel")
-        save(fig_noise_factor, self.get_output("noise_qa").path, "noise_factors")
+        save(fig_white, qa_dir, "whitened_histograms")
+        save(fig_chi2, qa_dir, "chi2_per_pixel")
+        save(fig_noise_factor, qa_dir, "noise_factors")
 
         return None
-

@@ -33,77 +33,114 @@ class MeasurePSF(PipelineStage):
         "model_pixel_scale": float,  # global: decoder grid (equal to pixel_scale in Test I)
         "internal_psf": dict,       # global: {type, beta, fwhm_arcsec}
         "fwhm_margin": 0.9,         # suggest G_int = margin * (narrowest observed FWHM)
+        "min_sampling_px": 2.5,     # G_int FWHM must cover at least this many model pixels (guide, section 3.4)
     }
 
     def run(self):
         """
         Run the PSF measurement and validation.
         """
+        from pathlib import Path
         from .utils.misc import write_yaml
 
-        isolated_dir = self.get_input("isolated_cutouts")
+        # ceci gives paths as strings; the Directory output must be created (open_output does that).
+        isolated_dir = Path(self.get_input("isolated_cutouts"))
         psf_stats_out = self.get_output("psf_stats")
-        qa_out = self.get_output("qa_psf")
+        qa_out = Path(self.open_output("qa_psf", wrapper=True).path)
 
+        bands = list(self.config["bands"])
         scale = self.config["pixel_scale"]
 
-        fwhm = self.measure_psf_fwhm(isolated_dir, scale) 
-        stats = self.compute_fwhm_stats(fwhm, self.config["bands"])
-        checks = self.compare_psf_to_internal(stats, 
-                                             self.config["internal_psf"], 
-                                             self.config["model_pixel_scale"], 
-                                             self.config["fwhm_margin"])
-        
-        psf_info = {"fwhm_stats": stats, 
+        fwhm = self.read_psf_fwhm(isolated_dir, bands)
+        ellipticity = self.measure_psf_ellipticity(isolated_dir, fwhm / scale)
+        stats = self.compute_fwhm_stats(fwhm, bands)
+        checks = self.compare_psf_to_internal(stats,
+                                              self.config["internal_psf"],
+                                              self.config["model_pixel_scale"],
+                                              self.config["fwhm_margin"],
+                                              self.config["min_sampling_px"])
+        ok = all(check["ok"] for check in checks.values())
+
+        psf_info = {"ok": ok,
+                    "n_objects": int(fwhm.shape[0]),
+                    "fwhm_stats": stats,
                     "internal_psf": self.config["internal_psf"],
-                    "suggested_internal_psf":
-                    {band: check["suggested_internal_psf"].get(band, None) for band, check in checks.items()},
-                    "ok (per band)": {band: check["ok"] for band, check in checks.items()}}
-        
+                    "suggested_internal_psf_fwhm": {band: check["suggested_fwhm"] for band, check in checks.items()},
+                    "ok_per_band": {band: check["ok"] for band, check in checks.items()},
+                    "errors": [e for check in checks.values() for e in check["errors"]],
+                    "warnings": [w for check in checks.values() for w in check["warnings"]]}
+
         write_yaml(psf_stats_out, psf_info)
-        self.make_qa_figs(fwhm, checks, qa_out)
+        self.make_qa_figs(fwhm, ellipticity, checks, bands, qa_out)
 
-        # Read the checks and raise errors/warnings as needed
-        for band, check in checks.items():
-            if not check["ok"]:
-                errors = [v for k, v in check.items() if k.endswith("_error")]
-                raise RuntimeError("Internal PSF validation failed:\n" + "\n".join(errors))
-            else:
-                warnings = [v for k, v in check.items() if k.endswith("_warning")]
-                if warnings:
-                    print("Internal PSF validation WARNINGS:\n" + "\n".join(warnings))
+        # Read the checks and raise errors/warnings as needed (after the files are written, so they can be read)
+        if psf_info["warnings"]:
+            print("Internal PSF validation WARNINGS:\n" + "\n".join(psf_info["warnings"]))
+        if not ok:
+            raise RuntimeError("Internal PSF validation failed:\n" + "\n".join(psf_info["errors"]))
 
 
-    def measure_psf_fwhm(self, isolated_dir, pixel_scale):
+    def read_psf_fwhm(self, isolated_dir, bands):
         """
-        Measure the FWHM of the PSF stamps in the isolated cutouts.
+        Read the FWHM of the PSF stamps of the isolated cutouts from meta.npz["psf_fwhm"].
+
+        DP2-cutouts (stamps.py) measures it with dp2_cutouts.common.psf.fwhm_from_stamp on the same float32 PSF
+        stamp that is exported to psf.npy, so measuring it again here would repeat the same computation.
 
         Parameters
         ----------
-        isolated_dir : DebvaderDataset
-            The directory containing the isolated cutouts.
-        pixel_scale : float
-            The pixel scale in arcseconds/pixel.
+        isolated_dir : pathlib.Path
+            The DebvaderDataset directory containing the isolated cutouts.
+        bands : list of str
+            The configured bands, checked against the dataset's.
 
         Returns
         -------
         fwhm : numpy.ndarray, shape (N, C)
-            The measured FWHM values for each object (N) and band (C).
+            The FWHM in arcsec for each object (N) and band (C).
         """
-        from dp2_cutouts.common import fwhm_from_stamp
-
-        # load psf.npy
-        psf_path = isolated_dir.path / "psf.npy"
-        psf_stamps = np.load(psf_path)  # shape (N, P, P, C)
-
-        # compute FWHM for each stamp N and each channel C
-        fwhm = np.zeros((psf_stamps.shape[0], psf_stamps.shape[3]), dtype=float)
-        for i in range(psf_stamps.shape[0]):
-            for c in range(psf_stamps.shape[3]):
-                psf_stamp = psf_stamps[i, :, :, c]
-                fwhm[i, c] = fwhm_from_stamp(psf_stamp, pixel_scale)
-
+        meta = np.load(isolated_dir / "meta.npz")
+        if "bands" in meta and list(meta["bands"]) != list(bands):
+            raise ValueError(f"{isolated_dir} has bands {list(meta['bands'])}, the configuration {list(bands)}")
+        fwhm = np.asarray(meta["psf_fwhm"], dtype=float)  # shape (N, C)
+        if fwhm.ndim != 2 or fwhm.shape[1] != len(bands):
+            raise ValueError(f"meta.npz['psf_fwhm'] has shape {fwhm.shape}, expected (N, {len(bands)})")
+        if not np.isfinite(fwhm).all():
+            raise ValueError(f"{int((~np.isfinite(fwhm)).sum())} non-finite PSF FWHM values in {isolated_dir}: "
+                             "objects without a PSF should have been removed by the `psf` export cut")
         return fwhm
+
+    def measure_psf_ellipticity(self, isolated_dir, fwhm_px, chunk=2000):
+        """
+        Ellipticity |e| = sqrt(e1^2 + e2^2), e1 = (Ixx - Iyy) / (Ixx + Iyy), e2 = 2 Ixy / (Ixx + Iyy), of each
+        PSF stamp, from second moments about the stamp centre (P // 2) with a circular Gaussian weight of the
+        stamp's own FWHM. The weight biases |e| low compared with adaptive moments, but it is the same for every
+        stamp, so the histogram shows the spread and the outliers, which is what the QA is for.
+
+        Parameters
+        ----------
+        isolated_dir : pathlib.Path
+            The DebvaderDataset directory containing the isolated cutouts.
+        fwhm_px : numpy.ndarray, shape (N, C)
+            The FWHM of each stamp, in pixels (sets the weight).
+
+        Returns
+        -------
+        ellipticity : numpy.ndarray, shape (N, C)
+        """
+        psf_stamps = np.load(isolated_dir / "psf.npy", mmap_mode="r")  # (N, P, P, C)
+        n, size = psf_stamps.shape[0], psf_stamps.shape[1]
+        y, x = np.mgrid[:size, :size] - size // 2
+        x, y = x[None, :, :, None], y[None, :, :, None]
+        out = np.full((n, psf_stamps.shape[3]), np.nan)
+        for a in range(0, n, chunk):
+            p = np.asarray(psf_stamps[a:a + chunk], dtype=float)
+            sigma = (fwhm_px[a:a + chunk] / 2.3548)[:, None, None, :]
+            w = p * np.exp(-0.5 * (x * x + y * y) / sigma**2)
+            ixx, iyy, ixy = ((w * q).sum(axis=(1, 2)) for q in (x * x, y * y, x * y))
+            with np.errstate(invalid="ignore", divide="ignore"):
+                out[a:a + chunk] = np.hypot(ixx - iyy, 2.0 * ixy) / (ixx + iyy)
+        return out
 
     def compute_fwhm_stats(self, fwhm, bands):
         """
@@ -119,78 +156,87 @@ class MeasurePSF(PipelineStage):
         Returns
         -------
         stats : dict
-            A dictionary containing the FWHM percentiles for each band.
+            A dictionary containing the FWHM percentiles for each band (plain floats, so they can go into yaml).
         """
         stats = {}
         for i, band in enumerate(bands):
             stats[band] = {
-                "p5": np.percentile(fwhm[:, i], 5),
-                "p50": np.percentile(fwhm[:, i], 50),
-                "p95": np.percentile(fwhm[:, i], 95),
-                "min": np.min(fwhm[:, i]),
-                "max": np.max(fwhm[:, i]),
+                "min": float(np.min(fwhm[:, i])),
+                "p1": float(np.percentile(fwhm[:, i], 1)),
+                "p5": float(np.percentile(fwhm[:, i], 5)),
+                "p50": float(np.percentile(fwhm[:, i], 50)),
+                "p95": float(np.percentile(fwhm[:, i], 95)),
+                "max": float(np.max(fwhm[:, i])),
             }
         return stats
 
-    def compare_psf_to_internal(self, stats, internal_psf, model_pixel_scale, fwhm_margin=0.9):
+    def compare_psf_to_internal(self, stats, internal_psf, model_pixel_scale, fwhm_margin=0.9, min_sampling_px=2.5):
         """
-        Compare the measured FWHM stats to the configured internal PSF. 
+        Compare the measured FWHM stats to the configured internal PSF.
         Fail if:
             - G_int_band >= fwhm_min_band
-            - G_int_band / model_pixel_scale < 2.0 (undersampled)
+            - G_int_band / model_pixel_scale < min_sampling_px (undersampled)
         Warn if:
-            - G_int_band < fwhm_margin * fwhm_p5_band *0.6
-                (G int is narrower than needed; suggest a new G_int)
+            - G_int_band < fwhm_margin * fwhm_p1_band * 0.6
+                (G int is narrower than needed)
+        Suggest, for every band: max(min_sampling_px * model_pixel_scale, fwhm_margin * fwhm_min_band)
 
         Parameters
         ----------
         stats : dict
             The FWHM percentiles for each band.
         internal_psf : dict
-            The configured internal PSF parameters (G_int) per band
+            The configured internal PSF parameters (G_int); fwhm_arcsec is one number or one per band
         model_pixel_scale : float
             The pixel scale of the model grid in arcseconds/pixel.
         fwhm_margin : float
             The margin factor for suggesting a new internal PSF.
+        min_sampling_px : float
+            Minimum G_int FWHM in model pixels. At 2.0 px about 6% of the Moffat's Fourier amplitude is left at
+            the pixel Nyquist frequency (aliased); at 2.5 px about 1.4%.
 
         Returns
         -------
-        check : dict
-            A dictionary of dictionaries containing the validation results and suggested G_int per band.
+        checks : dict
+            {band: {"ok", "fwhm", "suggested_fwhm", "errors", "warnings"}}
         """
+        bands = list(stats.keys())
+        g_int = internal_psf.get("fwhm_arcsec")
+        if g_int is None:
+            raise KeyError("internal_psf.fwhm_arcsec is not set")
+        if isinstance(g_int, (list, tuple)):
+            if len(g_int) != len(bands):
+                raise ValueError(f"internal_psf.fwhm_arcsec has {len(g_int)} values for {len(bands)} bands")
+            g_int_per_band = dict(zip(bands, (float(v) for v in g_int)))
+        else:
+            g_int_per_band = {band: float(g_int) for band in bands}
+
         checks = {}
+        for band, band_stats in stats.items():
+            g_int_band = g_int_per_band[band]
+            fwhm_min = band_stats["min"]
+            check = {"ok": True, "fwhm": g_int_band, "errors": [], "warnings": [],
+                     "suggested_fwhm": max(min_sampling_px * model_pixel_scale, fwhm_margin * fwhm_min)}
 
-        for band in stats.keys():
-            check = {"ok": True, "suggested_internal_psf": {}}
-            for band, band_stats in stats.items():
-                fwhm_min = band_stats["min"]
-                g_int = internal_psf.get("fwhm_arcsec", 0.0)
+            if g_int_band >= fwhm_min:
+                check["ok"] = False
+                check["errors"].append(f"{band}: internal PSF {g_int_band:.3f} >= min observed FWHM {fwhm_min:.3f}")
 
-                # Check if g_int is a list (per-band) or a single float
-                if isinstance(g_int, list):
-                    g_int_band = g_int[stats.keys().index(band)] if 0 <= stats.keys().index(band) < len(g_int) else 0.0
-                else:
-                    g_int_band = g_int
+            if g_int_band / model_pixel_scale < min_sampling_px - 1e-9:     # tolerance: 0.5 / 0.2 in floating point
+                check["ok"] = False
+                check["errors"].append(f"{band}: internal PSF {g_int_band:.3f} is undersampled "
+                                       f"({g_int_band / model_pixel_scale:.2f} < {min_sampling_px} model pixels)")
 
-
-                if g_int_band >= fwhm_min:
-                    check["ok"] = False
-                    check[f"{band}_error"] = f"Internal PSF {g_int_band:.3f} >= min observed FWHM {fwhm_min:.3f}"
-
-                if g_int_band / model_pixel_scale < 2.0:
-                    check["ok"] = False
-                    check[f"{band}_error"] = f"Internal PSF {g_int_band:.3f} is undersampled"
-
-                suggested_g_int = fwhm_margin * band_stats["p5"] * 0.6
-                if g_int_band < suggested_g_int:
-                    check[f"{band}_warning"] = f"Internal PSF {g_int_band:.3f} < suggested {suggested_g_int:.3f}"
-                    check["suggested_internal_psf"][band] = suggested_g_int
+            narrow = fwhm_margin * band_stats["p1"] * 0.6
+            if g_int_band < narrow:
+                check["warnings"].append(f"{band}: internal PSF {g_int_band:.3f} < {narrow:.3f} (much narrower "
+                                         f"than needed; suggested {check['suggested_fwhm']:.3f})")
 
             checks[band] = check
 
         return checks
 
-    def make_qa_figs(self, fwhm, checks, qa_out):
+    def make_qa_figs(self, fwhm, ellipticity, checks, bands, qa_out):
         """
         Make QA plots for the PSF FWHM distributions. We want:
          - FWHM histogram per band with the configured and suggested G_int marked
@@ -200,22 +246,25 @@ class MeasurePSF(PipelineStage):
         ----------
         fwhm : numpy.ndarray, shape (N, C)
             The measured FWHM values for each object (N) and band (C).
+        ellipticity : numpy.ndarray, shape (N, C)
+            The PSF ellipticity of each object and band.
         checks : dict of dicts {band: check}
             The checks for each band, including the configured and suggested G_int values.
-        qa_out : str or pathlib.Path
+        bands : list of str
+        qa_out : pathlib.Path
             The path to the output QA directory.
 
          """
         from .qa import make_psf_qa, save
 
-        fig_fwhm, fig_ellip = make_psf_qa(self.config["internal_psf"], fwhm, checks)
+        fig_fwhm, fig_ellip = make_psf_qa(fwhm, ellipticity, checks, bands)
 
-        save(fig_fwhm, qa_out / "psf_fwhm_histograms.png")
-        save(fig_ellip, qa_out / "psf_ellipticity_histograms.png")
+        save(fig_fwhm, qa_out, "psf_fwhm_histograms")
+        save(fig_ellip, qa_out, "psf_ellipticity_histograms")
 
         return None
 
-    
+
 
 class CheckKernels(PipelineStage):
     """

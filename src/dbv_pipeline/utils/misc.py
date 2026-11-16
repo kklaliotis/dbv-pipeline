@@ -92,17 +92,31 @@ def rename_iterated(it, renames):
                 del data[old]
         yield s, e, data
 
-def write_yaml(self, path, data):
-        """
-        Write a dictionary to a YAML file.
-        
-        Parameters
-        ----------
-        path : str or pathlib.Path
-            The path to the output YAML file.
-        data : dict
-            The data to write to the YAML file.
-        """
-        import yaml
-        with open(path, "w") as f:
-            yaml.dump(data, f)
+def to_builtin(obj):
+    """Convert numpy scalars and arrays (also inside dicts, lists and tuples) to plain Python types, so that
+    yaml.safe_dump can write them and yaml.safe_load can read them back."""
+    if isinstance(obj, dict):
+        return {str(k) if isinstance(k, np.generic) else k: to_builtin(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [to_builtin(v) for v in obj]
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, np.generic):
+        return obj.item()
+    return obj
+
+
+def write_yaml(path, data):
+    """
+    Write a dictionary to a YAML file.
+
+    Parameters
+    ----------
+    path : str or pathlib.Path
+        The path to the output YAML file.
+    data : dict
+        The data to write to the YAML file. Numpy values are converted to plain Python types first.
+    """
+    import yaml
+    with open(path, "w") as f:
+        yaml.safe_dump(to_builtin(data), f, sort_keys=False)

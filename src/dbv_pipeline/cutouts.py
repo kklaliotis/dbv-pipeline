@@ -21,7 +21,6 @@ class MakeCutouts(PipelineStage):
     empty_cutouts    : DebvaderDataset of empty-sky stamps
     qa_cutouts       : montages, masked-fraction and variance diagnostics
 
-    STUB: nothing is implemented yet. 
     """
 
     name = "MakeCutouts"
@@ -43,62 +42,72 @@ class MakeCutouts(PipelineStage):
         from dp2_cutouts.stages import export_debvader
         from .utils.config import build_dp2_cutouts_config
 
-        selection_catalog = self.get_input("selection_catalog")
-
         workdir = Path(self.config["work_dir"])/"dp2_cutouts"
         # Convert the ceci config to a DP2-cutouts config
-        cfg = build_dp2_cutouts_config(self.config, workdir)
+        cfg = build_dp2_cutouts_config(self.config, workdir, label="config_MakeCutouts")
+        self.check_work_catalogue(cfg)
 
         self.STEPS = ["stamps", "empty_sky"]
         self.run_cutout_step(cfg)
 
-        iso_cutouts = self.get_output("isolated_cutouts")
-        empty_cutouts= self.get_output("empty_cutouts")
+        # ceci gives the in-progress paths as strings; export_* create the directories. Do not call open_output on
+        # these two tags as well: for a Directory it deletes what is already there.
+        iso_cutouts = Path(self.get_output("isolated_cutouts"))
+        empty_cutouts = Path(self.get_output("empty_cutouts"))
 
         export_debvader.export_isolated(cfg, iso_cutouts)
-        export_debvader.export_empty(cfg, empty_cutouts)
+        export_debvader.export_empty(cfg, empty_cutouts, iso_cutouts)   # stats.json is copied from the isolated set
 
-        print(f"Cutouts written to {iso_cutouts.path} and {empty_cutouts.path}")
+        print(f"Cutouts written to {iso_cutouts} and {empty_cutouts}")
 
-        qa_out = self.get_output("qa_cutouts")
+        qa_out = Path(self.open_output("qa_cutouts", wrapper=True).path)   # creates the directory
         self.qa_cutouts(iso_cutouts, empty_cutouts, qa_out)
 
-        
+    def check_work_catalogue(self, cfg):
+        """
+        The DP2-cutouts steps read their own copy of the catalogue (<work_dir>/tables_and_stamps/catalog.parquet)
+        and the other files SelectSources left in the working folder, not the selection_catalog input. Check that
+        the copy exists and holds the same objects, so that the ceci dependency is real.
+        """
+        import pandas as pd
+        from dp2_cutouts.config import TABLES_DIR
+
+        work_cat = cfg.data(TABLES_DIR, "catalog.parquet")
+        if not work_cat.exists():
+            raise FileNotFoundError(
+                f"{work_cat} is missing: the DP2-cutouts working folder no longer holds SelectSources' files. "
+                "Delete the selection_catalog and qa_isolation outputs and re-run SelectSources.")
+        ids_work = pd.read_parquet(work_cat, columns=["object_id"])["object_id"]
+        ids_sel = pd.read_parquet(self.get_input("selection_catalog"), columns=["object_id"])["object_id"]
+        if len(ids_work) != len(ids_sel) or set(ids_work) != set(ids_sel):
+            raise RuntimeError(f"{work_cat} and the selection_catalog input hold different objects: "
+                               "SelectSources was re-run without MakeCutouts' outputs being deleted, or the reverse")
 
     def run_cutout_step(self, cfg):
         """
-        Run the two DP2-cutouts cutout steps. 
-        These steps write the debvader input cutouts to the work_dir and some QA outputs to the QA dir.
-        The locations fo the fiels are output as DebvaderDataset and Directory objects, 
-        which are passed to the next pipeline stage.
+        Run the two DP2-cutouts cutout steps.
+        These steps write per-patch files into the DP2-cutouts working folder; export_debvader turns them into
+        the two datasets.
         """
         from dp2_cutouts import cli
 
         for step in self.STEPS:
             self.time_stamp(f"start {step}")
             cli.run_step(cfg, step)
-        self.time_stamp("catalogue steps done")
+        self.time_stamp("cutout steps done")
 
 
-    def qa_cutouts(self, isolated, empty, qa_out):
+    def qa_cutouts(self, isolated, empty, qa_dir):
         """
-        QA cutouts are already made for sources in the selection steps, but we should make sure
-        that the cutouts are valid and that the empty-sky cutouts are indeed empty.
-
+        Montages of random isolated and empty-sky stamps from the exported arrays, to check that the export
+        looks like the stamps seen at the selection step and that the empty-sky stamps are indeed empty.
         """
         from .qa import make_cutout_qa, save
 
-        iso_figs = []
-        empty_figs = []
-        qa_dir = qa_out.path
-
-        iso_fig = make_cutout_qa(isolated, qa_out)
-        iso_figs.append(save(iso_fig, qa_dir, "isolated_cutouts"))
-
-        empty_fig = make_cutout_qa(empty, qa_out, empty=True)
-        empty_figs.append(save(empty_fig, qa_dir, "empty_cutouts"))
-
-
-
-
-    
+        bands, scale = list(self.config["bands"]), float(self.config["pixel_scale"])
+        for name, path, empty_flag in (("isolated_cutouts", isolated, False), ("empty_cutouts", empty, True)):
+            fig = make_cutout_qa(path, bands, scale, empty=empty_flag)
+            if fig is None:
+                print(f"QA montage of {name} skipped (no stamps, or no g, r, i bands)")
+                continue
+            save(fig, qa_dir, name)
