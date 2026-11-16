@@ -15,20 +15,19 @@ class SelectSources(PipelineStage):
       copaings        Rubin x Euclid matching, ellipse overlap test, blending entropy S_b
       catalog_table   one row per Rubin object, with the catalogue cuts recorded as value + pass flag
 
-    No row is removed. The output catalogue holds every Rubin object that copaings kept (see the note below)
+    Output catalogue holds every Rubin object that copaings kept (see the note below)
     together with
         cut1_pass            Euclid counterpart is neither point-like nor spurious
-        cut2_pass            one-to-one Euclid match and blending entropy S_b = 0 (isolation certified by Euclid)
+        cut2_pass            one-to-one Euclid match and blending entropy S_b = 0 
         cut6_pass            i-band cModel S/N above cuts.snr_min
         selected             cut1 & cut2 & cut6: the isolated-galaxy sample at catalogue level
-        rubin_deblend_pass   recorded for comparison, NOT part of `selected` unless require_rubin_deblend is true:
-                             Rubin did not split the object from a neighbour (detect_isIsolated, or a blend that
-                             produced a single child, deblend_blendNChild == 1)
+        rubin_deblend_pass   kept for comparison, NOT part of `selected` unless require_rubin_deblend is true:
+                             Rubin did not split the object from a neighbour 
     The pixel-level cuts (3, 4, 5, 7, 8 and the masking decision) are applied later, by MakeCutouts.
 
     Which Rubin objects enter: those that pass the star-galaxy criterion configured in
-    dp2_cutouts.rubin.star_galaxy (a column of the Rubin object table and a threshold; default in the pipeline
-    config: griz_model_extendedness > 0.5) and have i_cModel_mag <= copaings.mag_cut. copaings applies this
+    dp2_cutouts.rubin.star_galaxy (a column of the Rubin object table and a threshold; default: 
+    griz_model_extendedness > 0.5) and have i_cModel_mag <= copaings.mag_cut. copaings applies this
     filter before matching, so objects that fail it are not in the catalogue at all.
 
     Outputs
@@ -41,13 +40,13 @@ class SelectSources(PipelineStage):
     inputs = []
     outputs = [("selection_catalog", ParquetFile), ("qa_isolation", Directory)]
     config_options = {
-        "work_dir": str,            # global: working area; DP2-cutouts writes under <work_dir>/dp2_cutouts
-        "bands": [str],             # global (ceci needs the element type: a bare `list` breaks its parser)
-        "pixel_scale": float,       # global
-        "stamp_arcsec": float,      # global
-        "psf_stamp_px": 35,         # global
-        "split": dict,              # global
-        "dp2_cutouts": dict,        # passed to DP2-cutouts (see utils.config.build_dp2_cutouts_config)
+        "work_dir": str,            
+        "bands": [str],             
+        "pixel_scale": float,       
+        "stamp_arcsec": float,      
+        "psf_stamp_px": 35,         
+        "split": dict,              
+        "dp2_cutouts": dict,        # passed to DP2-cutouts
         "require_rubin_deblend": False,  # also cut on rubin_deblend_pass (default: only record it)
         "montage_n": 24,            # stamps per QA montage; 0 disables the montages (they need the Butler)
         "montage_seed": 0,
@@ -57,7 +56,6 @@ class SelectSources(PipelineStage):
 
     def run(self):
         from pathlib import Path
-
         from .utils.config import build_dp2_cutouts_config
 
         # DP2-cutouts keeps all its intermediate files in one working folder (its "data_root").
