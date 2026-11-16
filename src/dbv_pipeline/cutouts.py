@@ -35,6 +35,10 @@ class MakeCutouts(PipelineStage):
         "psf_stamp_px": 35,         
         "split": dict,              # global: train / val / test fractions, assigned by patch
         "dp2_cutouts": dict,        # passed to DP2-cutouts
+        # Warn (summary.yaml, log) when the stamps look bad: fraction of the in-region targets rejected by the pixel
+        # cuts, and fraction of the exported objects whose shape measurement failed (NaN e1, e2, hsm_sigma).
+        "warn_reject_fraction": 0.5,
+        "warn_shape_fail_fraction": 0.05,
     }
 
     def run(self):
@@ -61,6 +65,7 @@ class MakeCutouts(PipelineStage):
         print(f"Cutouts written to {iso_cutouts} and {empty_cutouts}")
 
         qa_out = Path(self.open_output("qa_cutouts", wrapper=True).path)   # creates the directory
+        self.summarise_cutouts(cfg, iso_cutouts, qa_out)
         self.qa_cutouts(iso_cutouts, empty_cutouts, qa_out)
 
     def check_work_catalogue(self, cfg):
@@ -111,3 +116,109 @@ class MakeCutouts(PipelineStage):
                 print(f"QA montage of {name} skipped (no stamps, or no g, r, i bands)")
                 continue
             save(fig, qa_dir, name)
+
+    def summarise_cutouts(self, cfg, isolated, qa_dir):
+        """
+        How many objects each pixel-level cut removes, and how many measurements failed, from the per-patch files
+        of the stamps and empty_sky steps. Written to qa_dir/summary.yaml and as a funnel figure; a warning is
+        printed (and recorded) when the rejected or failed fractions exceed the configured thresholds.
+        """
+        import json
+        import numpy as np
+        import pandas as pd
+        from dp2_cutouts.stages.export_debvader import patch_files_dir
+        from . import qa
+        from .utils.misc import write_yaml
+
+        pdir = patch_files_dir(cfg)
+        t = pd.concat([pd.read_parquet(f) for f in sorted(pdir.glob("table_*.parquet"))], ignore_index=True)
+        apply = list(cfg["export"]["apply"])
+
+        def flag(name):
+            col = "in_region" if name == "in_region" else f"{name}_pass"
+            if col not in t:
+                return np.zeros(len(t), bool)
+            return t[col].astype("boolean").fillna(False).to_numpy(bool)
+
+        def boolean(col, default=False):
+            if col not in t:
+                return np.full(len(t), default)
+            return t[col].astype("boolean").fillna(default).to_numpy(bool)
+
+        target = boolean("pixel_target")
+        in_region = target & flag("in_region")
+
+        # Cumulative funnel, in the order of export.apply (the export keeps the objects passing all of them).
+        funnel = {"catalogue objects in the processed patches": int(len(t)),
+                  "pixel targets (cut1 & cut2)": int(target.sum())}
+        keep = target.copy()
+        for name in apply:
+            keep &= flag(name)
+            funnel[f"+ {name}"] = int(keep.sum())
+        n_meta = len(np.load(isolated / "meta.npz")["split"])
+        if n_meta != int(keep.sum()):
+            print(f"WARNING: the funnel ends at {int(keep.sum())} objects but the export holds {n_meta}")
+
+        # Each pixel cut on its own, among the in-region targets: which cut is doing the damage.
+        pixel_cuts = [n for n in apply if n not in ("cut1", "cut2", "cut6", "in_region")]
+        n_in = int(in_region.sum())
+        alone = {n: int((in_region & ~flag(n)).sum()) for n in pixel_cuts}
+
+        shape_failed = in_region & ~boolean("shape_ok", default=True)
+        exported_shape_failed = keep & ~np.isfinite(pd.to_numeric(t.get("e1"), errors="coerce").to_numpy(float)) \
+            if "e1" in t else np.zeros(len(t), bool)
+        cut8_not_evaluated = in_region & ~boolean("cut8_evaluated", default=True)
+
+        per_patch = {}
+        for (tr, pa), g in t.groupby(["tract", "patch"]):
+            idx = g.index.to_numpy()
+            per_patch[f"{int(tr)}/{int(pa)}"] = {"targets": int(target[idx].sum()), "in_region": int(in_region[idx].sum()),
+                                               "exported": int(keep[idx].sum()),
+                                               "shape_failed": int(shape_failed[idx].sum())}
+        empty = {}
+        for f in sorted(pdir.glob("empty_*.npz")):
+            d = np.load(f)
+            empty[f.stem.replace("empty_", "").replace("_", "/")] = {
+                "windows": int(d["n_windows"]), "clean": int(d["n_clean"]), "written": int(len(d["ra"]))}
+
+        def frac(a, b):
+            return round(a / b, 4) if b else None
+
+        summary = {
+            "funnel": funnel,
+            "in_region_targets": n_in,
+            "rejected_by_each_pixel_cut_alone": {n: {"n": v, "fraction": frac(v, n_in)} for n, v in alone.items()},
+            "rejected_by_pixel_cuts": {"n": n_in - int(keep.sum()), "fraction": frac(n_in - int(keep.sum()), n_in)},
+            "shape_measurement_failed": {"in_region": int(shape_failed.sum()), "fraction": frac(int(shape_failed.sum()), n_in),
+                                         "exported": int(exported_shape_failed.sum()),
+                                         "exported_fraction": frac(int(exported_shape_failed.sum()), int(keep.sum()))},
+            "cut8_not_evaluated": int(cut8_not_evaluated.sum()),
+            "exported": int(keep.sum()),
+            "per_patch": per_patch,
+            "empty_sky_per_patch": empty,
+        }
+        warnings = []
+        rej = summary["rejected_by_pixel_cuts"]["fraction"]
+        if rej is not None and rej > self.config["warn_reject_fraction"]:
+            worst = max(alone, key=alone.get) if alone else None
+            warnings.append(f"the pixel cuts reject {100 * rej:.0f}% of the in-region targets "
+                            f"(largest on its own: {worst}, {alone.get(worst)} objects)")
+        sf = summary["shape_measurement_failed"]["exported_fraction"]
+        if sf is not None and sf > self.config["warn_shape_fail_fraction"]:
+            warnings.append(f"{100 * sf:.1f}% of the exported objects have no shape measurement (NaN e1, e2, hsm_sigma)")
+        if int(keep.sum()) == 0:
+            warnings.append("no object was exported")
+        summary["warnings"] = warnings
+
+        write_yaml(qa_dir / "summary.yaml", summary)
+        print("cutout funnel:\n" + "\n".join(f"  {k:45s} {v:>8,}" for k, v in funnel.items()))
+        print("rejected by each pixel cut alone (in-region targets): " + ", ".join(f"{k} {v}" for k, v in alone.items()))
+        for w in warnings:
+            print(f"WARNING: {w}")
+
+        plt = qa.style()
+        fig, ax = plt.subplots(figsize=(8.2, 0.42 * len(funnel) + 0.8))
+        qa.funnel(ax, list(funnel.keys()), list(funnel.values()))
+        ax.set_title("Cutout funnel (cumulative, in export.apply order)")
+        qa.save(fig, qa_dir, "cutout_funnel")
+        return summary
