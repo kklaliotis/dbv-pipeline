@@ -409,8 +409,9 @@ class Directory(DataFile):
 
 class DebvaderDataset(Directory):
     """
-    A dataset directory in the debvader format (docs/IMPLEMENTATION_GUIDE.md, section 4.1): arrays of stamps,
-    variance, mask and PSF stamps, one row per object, plus meta.npz, stats.json and dataset.json.
+    A dataset directory in the debvader format : 
+    arrays of stamps, variance, mask and PSF stamps, one row per object, 
+    plus meta.npz, stats.json and dataset.json.
     """
 
     required = ("images.npy", "variance.npy", "mask.npy", "psf.npy", "meta.npz", "stats.json", "dataset.json")
@@ -422,7 +423,8 @@ class DebvaderDataset(Directory):
 
 
 class BlendDataset(DebvaderDataset):
-    """A DebvaderDataset of blended scenes: images.npy is the scene, targets.npy what the deblender must recover."""
+    """A DebvaderDataset of blended scenes:
+      images.npy is the scene, targets.npy what the deblender must recover."""
 
     required = DebvaderDataset.required + ("targets.npy",)
 
