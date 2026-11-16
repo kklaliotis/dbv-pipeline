@@ -29,6 +29,8 @@ export PATH=$DBV_DATA_PREFIX/bin:$PATH
 export HF_HOME=${HF_HOME:-$PSCRATCH/cache/huggingface}
 export MPLCONFIGDIR=${MPLCONFIGDIR:-$PSCRATCH/cache/matplotlib}
 export MPLBACKEND=${MPLBACKEND:-Agg}
+# Unbuffered stdout: ceci writes each stage's output to a log file, where Python would otherwise buffer prints.
+export PYTHONUNBUFFERED=1
 mkdir -p "$HF_HOME" "$MPLCONFIGDIR"
 
 exec "$@"

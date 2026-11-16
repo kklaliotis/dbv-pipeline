@@ -46,9 +46,11 @@ class MakeCutouts(PipelineStage):
         from dp2_cutouts.stages import export_debvader
         from .utils.config import build_dp2_cutouts_config
 
+        self.time_stamp("MakeCutouts: building the DP2-cutouts configuration")
         workdir = Path(self.config["work_dir"])/"dp2_cutouts"
         # Convert the ceci config to a DP2-cutouts config
         cfg = build_dp2_cutouts_config(self.config, workdir, label="config_MakeCutouts")
+        self.time_stamp("MakeCutouts: checking the working catalogue")
         self.check_work_catalogue(cfg)
 
         self.STEPS = ["stamps", "empty_sky"]
@@ -59,14 +61,19 @@ class MakeCutouts(PipelineStage):
         iso_cutouts = Path(self.get_output("isolated_cutouts"))
         empty_cutouts = Path(self.get_output("empty_cutouts"))
 
+        self.time_stamp("MakeCutouts: exporting the isolated dataset")
         export_debvader.export_isolated(cfg, iso_cutouts)
+        self.time_stamp("MakeCutouts: exporting the empty-sky dataset")
         export_debvader.export_empty(cfg, empty_cutouts, iso_cutouts)   # stats.json is copied from the isolated set
 
         print(f"Cutouts written to {iso_cutouts} and {empty_cutouts}")
 
         qa_out = Path(self.open_output("qa_cutouts", wrapper=True).path)   # creates the directory
+        self.time_stamp("MakeCutouts: cutout summary")
         self.summarise_cutouts(cfg, iso_cutouts, qa_out)
+        self.time_stamp("MakeCutouts: QA montages")
         self.qa_cutouts(iso_cutouts, empty_cutouts, qa_out)
+        self.time_stamp("MakeCutouts: done")
 
     def check_work_catalogue(self, cfg):
         """
@@ -100,6 +107,7 @@ class MakeCutouts(PipelineStage):
             self.time_stamp(f"start {step}")
             cli.run_step(cfg, step)
         self.time_stamp("cutout steps done")
+
 
 
     def qa_cutouts(self, isolated, empty, qa_dir):
