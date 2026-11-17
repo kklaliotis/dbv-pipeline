@@ -224,6 +224,9 @@ class SelectSources(PipelineStage):
                 "euclid_phz_median": pct(cat["euclid_phz_median"][sel], q),
                 "nearest_other_euclid_arcsec": pct(cat["nn_euclid_arcsec"][sel], q),
                 "psf_fwhm_i_arcsec (moments)": pct(cat["psf_sigma_i"][sel] * 2.3548, q),
+                # No valid i-band catalogue ellipse: copaings tested isolation by distance only (not a cut).
+                "no_valid_i_moments": (int((sel & ~cat["has_valid_i_moments"].to_numpy(bool)).sum())
+                                       if "has_valid_i_moments" in cat else None),
             },
             "not_selected_extended_with_snr": {
                 "n": int((~sel & c6).sum()),

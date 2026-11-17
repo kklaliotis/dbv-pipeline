@@ -66,6 +66,9 @@ MakeCutouts:
       apply: [cut1, cut2, cut3, in_region, cut4, cut5, cut6, cut7, cut8, mask, psf]   # psf: the coadd has a PSF for the object in every band
       mask_planes: [NO_DATA, SATURATED, COSMIC_RAY, INTERPOLATED, DETECTION_EDGE]
       n_empty_per_patch: 400
+      # Empty-sky windows may contain detected pixels (replaced by real sky from the patch); the emptiest are
+      # taken first, and none above this fraction of detected pixels.
+      empty_max_detected_fraction: 0.3
 
 # --- Stage sections below belong to stages that are still stubs ------------------------------------------------
 

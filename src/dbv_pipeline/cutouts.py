@@ -186,8 +186,14 @@ class MakeCutouts(PipelineStage):
         empty = {}
         for f in sorted(pdir.glob("empty_*.npz")):
             d = np.load(f)
-            empty[f.stem.replace("empty_", "").replace("_", "/")] = {
-                "windows": int(d["n_windows"]), "clean": int(d["n_clean"]), "written": int(len(d["ra"]))}
+            entry = {"windows": int(d["n_windows"]), "fully_clean": int(d["n_clean"]), "written": int(len(d["ra"]))}
+            if "detected_fraction" in d:      # windows with detected pixels, filled with real empty sky
+                df, bad = d["detected_fraction"], d["fill_bad_fraction"]
+                entry.update(candidates=int(d["n_candidates"]),
+                             detected_fraction_median=float(np.median(df)) if len(df) else None,
+                             detected_fraction_max=float(df.max()) if len(df) else None,
+                             unfilled_fraction_mean=float(bad.mean()) if len(bad) else None)
+            empty[f.stem.replace("empty_", "").replace("_", "/")] = entry
 
         def frac(a, b):
             return round(a / b, 4) if b else None
@@ -201,6 +207,9 @@ class MakeCutouts(PipelineStage):
                                          "exported": int(exported_shape_failed.sum()),
                                          "exported_fraction": frac(int(exported_shape_failed.sum()), int(keep.sum()))},
             "cut8_not_evaluated": int(cut8_not_evaluated.sum()),
+            # Exported objects whose copaings isolation rests on distance only (no valid i-band catalogue ellipse).
+            "exported_no_valid_i_moments": (int((keep & ~boolean("has_valid_i_moments", default=True)).sum())
+                                            if "has_valid_i_moments" in t else None),
             "exported": int(keep.sum()),
             "per_patch": per_patch,
             "empty_sky_per_patch": empty,
