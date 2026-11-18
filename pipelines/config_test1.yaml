@@ -8,7 +8,7 @@ global:
   unit: nJy
 
   internal_psf:
-    type: moffat
+    form: moffat
     beta: 4.765
     fwhm_arcsec: 0.5 # one number, or a list with one value per band
 

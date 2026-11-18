@@ -31,7 +31,7 @@ class MeasurePSF(PipelineStage):
         "bands": [str],             # global
         "pixel_scale": float,       # global: data grid, arcsec per pixel
         "model_pixel_scale": float,  # global: decoder grid (equal to pixel_scale in Test I)
-        "internal_psf": dict,       # global: {type, beta, fwhm_arcsec}
+        "internal_psf": dict,       # global: {form, beta, fwhm_arcsec}
         "fwhm_margin": 0.9,         # suggest G_int = margin * (narrowest observed FWHM)
         "min_sampling_px": 2.5,     # G_int FWHM must cover at least this many model pixels (guide, section 3.4)
     }
